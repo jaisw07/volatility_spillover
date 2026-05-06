@@ -1,8 +1,13 @@
+import sys
+import os
+
+# Ensure src module is discoverable
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+
 import ingestion
 import preproc
 import eda
 import garch
-import os
 
 print("--- Running Ingestion ---")
 ingestion.download_assets()

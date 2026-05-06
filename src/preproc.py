@@ -323,7 +323,9 @@ def build_unified_matrix(window: int = 5, save: bool = True):
         "^AXJO",
         "^NSEI",     # included but can be filtered later
         "GC=F",
-        "USDINR=X"   # included but optional in global stage
+        "USDINR=X",  # included but optional in global stage
+        "^VIX",
+        "DX-Y.NYB"
     ]
 
     unified_df = None

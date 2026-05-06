@@ -1,6 +1,0 @@
-__pycache__/
-*.pyc
-*.csv
-dataset/
-insights/
-.ipynb_checkpoints/

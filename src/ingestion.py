@@ -19,6 +19,11 @@ ASSETS = {
     # --- Commodities ---
     "GC=F": "commodity",   # Gold (USD)
 
+    # --- Macro ---
+    "^VIX": "macro",       # Volatility Index
+    "DX-Y.NYB": "macro",   # USD Index
+
+
     # --- FX (CRITICAL for conversion) ---
     "USDINR=X": "fx",  # USD → INR (base conversion anchor)
 
