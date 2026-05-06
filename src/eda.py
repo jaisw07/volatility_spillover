@@ -273,3 +273,92 @@ def detect_crypto_crashes(window: int = 5, min_duration: int = 5, plot: bool = T
     print(f"\nSaved summary → {summary_path}")
 
     return summary_df, crash_periods
+
+def summarize_crash_overlap(save: bool = True):
+    """
+    Summarize BTC vs ETH crash overlap.
+
+    Outputs:
+    - Day-level counts
+    - Event-level periods:
+        * BTC-only
+        * ETH-only
+        * Overlap
+
+    Saves:
+    - insights/crash_overlap_summary.csv
+    - insights/crash_overlap_periods.csv
+    """
+
+    # --- Load crash flags ---
+    btc = pd.read_csv(os.path.join(INSIGHTS_DIR, "crash_flags_BTC-USD.csv"))
+    eth = pd.read_csv(os.path.join(INSIGHTS_DIR, "crash_flags_ETH-USD.csv"))
+
+    btc["date"] = pd.to_datetime(btc["date"])
+    eth["date"] = pd.to_datetime(eth["date"])
+
+    btc = btc[["date", "crash_flag"]].rename(columns={"crash_flag": "btc"})
+    eth = eth[["date", "crash_flag"]].rename(columns={"crash_flag": "eth"})
+
+    df = btc.merge(eth, on="date", how="inner")
+
+    # --- Categories ---
+    df["overlap"] = ((df["btc"] == 1) & (df["eth"] == 1)).astype(int)
+    df["btc_only"] = ((df["btc"] == 1) & (df["eth"] == 0)).astype(int)
+    df["eth_only"] = ((df["btc"] == 0) & (df["eth"] == 1)).astype(int)
+
+    # --- Day-level summary ---
+    summary = pd.DataFrame([{
+        "btc_crash_days": df["btc"].sum(),
+        "eth_crash_days": df["eth"].sum(),
+        "overlap_days": df["overlap"].sum(),
+        "btc_only_days": df["btc_only"].sum(),
+        "eth_only_days": df["eth_only"].sum()
+    }])
+
+    print("\n=== DAY-LEVEL SUMMARY ===")
+    print(summary)
+
+    # --- Helper to extract periods ---
+    def extract_periods(series, label):
+        temp = df[series == 1].copy()
+
+        if temp.empty:
+            return pd.DataFrame(columns=["type", "start", "end", "duration"])
+
+        temp["group"] = (temp["date"].diff().dt.days != 1).cumsum()
+
+        periods = temp.groupby("group").agg(
+            start=("date", "first"),
+            end=("date", "last"),
+            duration=("date", "count")
+        ).reset_index(drop=True)
+
+        periods["type"] = label
+
+        return periods[["type", "start", "end", "duration"]]
+
+    # --- Event-level periods ---
+    btc_only_p = extract_periods(df["btc_only"], "btc_only")
+    eth_only_p = extract_periods(df["eth_only"], "eth_only")
+    overlap_p = extract_periods(df["overlap"], "overlap")
+
+    periods_df = pd.concat([btc_only_p, eth_only_p, overlap_p], ignore_index=True)
+
+    print("\n=== SAMPLE EVENT PERIODS ===")
+    print(periods_df.head())
+
+    # --- Save ---
+    if save:
+        os.makedirs(INSIGHTS_DIR, exist_ok=True)
+
+        summary_path = os.path.join(INSIGHTS_DIR, "crash_overlap_summary.csv")
+        periods_path = os.path.join(INSIGHTS_DIR, "crash_overlap_periods.csv")
+
+        summary.to_csv(summary_path, index=False)
+        periods_df.to_csv(periods_path, index=False)
+
+        print(f"\nSaved → {summary_path}")
+        print(f"Saved → {periods_path}")
+
+    return summary, periods_df
