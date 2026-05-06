@@ -3,22 +3,34 @@ import yfinance as yf
 import pandas as pd
 from datetime import datetime
 
-# Step 1.1 asset universe EXACTLY as per methodology
 ASSETS = {
+    # --- Crypto ---
     "BTC-USD": "crypto",
     "ETH-USD": "crypto",
-    "^GSPC": "equity",
-    "^GSPTSE": "equity",
-    "^HSI": "equity",
-    "^BVSP": "equity",
-    "^AXJO": "equity",
-    "^NSEI": "equity",
-    "GC=F": "commodity",
-    "USDINR=X": "fx"
+
+    # --- Equity Indices ---
+    "^GSPC": "equity",     # USA (USD)
+    "^GSPTSE": "equity",   # Canada (CAD)
+    "^HSI": "equity",      # Hong Kong (HKD)
+    "^BVSP": "equity",     # Brazil (BRL)
+    "^AXJO": "equity",     # Australia (AUD)
+    "^NSEI": "equity",     # India (INR)
+
+    # --- Commodities ---
+    "GC=F": "commodity",   # Gold (USD)
+
+    # --- FX (CRITICAL for conversion) ---
+    "USDINR=X": "fx",  # USD → INR (base conversion anchor)
+
+    # Cross rates → USD
+    "CAD=X": "fx",     # CAD → USD
+    "HKD=X": "fx",     # HKD → USD
+    "BRL=X": "fx",     # BRL → USD
+    "AUD=X": "fx"      # AUD → USD
 }
 
 START_DATE = "2020-01-01"
-END_DATE = datetime.today().strftime("%Y-%m-%d")
+END_DATE = "2025-12-31"
 
 DATASET_DIR = "dataset"
 
@@ -81,7 +93,7 @@ def fetch_and_store_ticker(ticker: str, start: str = START_DATE, end: str = END_
         print(f"Error fetching {ticker}: {e}")
 
 
-def run_step_1_1():
+def download_assets():
     """
     Execute Step 1.1:
     - Fetch daily OHLCV data for all assets

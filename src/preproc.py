@@ -73,62 +73,101 @@ def check_nan_across_files(save_report: bool = True):
 
     return summary_df
 
-def forward_fill_all_files(limit: int = 2, save_copy: bool = False):
+# --- FX mapping for non-USD assets ---
+FX_MAP = {
+    "^GSPTSE": "CAD=X",
+    "^HSI": "HKD=X",
+    "^BVSP": "BRL=X",
+    "^AXJO": "AUD=X"
+}
+
+
+def _load_fx_series(fx_ticker):
     """
-    Step 1.2 (partial):
-    Forward-fill NaN values across all dataset CSVs.
+    Load FX series and return (date, rate)
+    Uses adj_close as FX rate
+    """
+    path = os.path.join(DATASET_DIR, f"{fx_ticker}.csv")
+    df = pd.read_csv(path)
 
-    Parameters:
-    - limit: max consecutive NaNs to fill (as per methodology → 2)
-    - save_copy: if True, saves to dataset_filled/ instead of overwriting
+    df["date"] = pd.to_datetime(df["date"])
 
-    Returns:
-    - summary dataframe of fills applied
+    # Find adj_close column dynamically
+    adj_col = [c for c in df.columns if "adj_close" in c][0]
+
+    return df[["date", adj_col]].rename(columns={adj_col: "fx_rate"})
+
+
+def _convert_to_usd(df, ticker):
+    """
+    Convert local currency → USD for non-USD assets
+    """
+    fx_ticker = FX_MAP.get(ticker)
+
+    if fx_ticker is None:
+        return df  # already USD or INR
+
+    fx_df = _load_fx_series(fx_ticker)
+
+    df = df.merge(fx_df, on="date", how="left")
+
+    price_cols = [c for c in df.columns if any(x in c for x in ["open", "high", "low", "close", "adj_close"])]
+
+    for col in price_cols:
+        df[col] = df[col] * df["fx_rate"]  # local → USD
+
+    df.drop(columns=["fx_rate"], inplace=True)
+
+    return df
+
+
+def convert_all_to_inr():
+    """
+    Convert all dataset files to INR (in place)
+
+    Steps:
+    - Local → USD (if needed)
+    - USD → INR
     """
 
-    output_dir = DATASET_DIR if not save_copy else "dataset_filled"
-    os.makedirs(output_dir, exist_ok=True)
+    print("=== CONVERTING ALL ASSETS TO INR ===\n")
 
-    summary = []
-
-    print("=== FORWARD FILL START ===\n")
+    # Load USDINR once
+    usdinr = _load_fx_series("USDINR=X")
 
     for file in os.listdir(DATASET_DIR):
         if not file.endswith(".csv"):
             continue
 
+        ticker = file.replace(".csv", "")
         path = os.path.join(DATASET_DIR, file)
+
+        # Skip FX files themselves
+        if ticker in ["USDINR=X", "CAD=X", "HKD=X", "BRL=X", "AUD=X"]:
+            continue
+
         df = pd.read_csv(path)
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date")
 
-        # Ensure proper date ordering (critical before ffill)
-        if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"])
-            df = df.sort_values("date")
+        print(f"Processing {ticker}...")
 
-        before_nans = df.isna().sum().sum()
+        # --- Step 1: Convert to USD if needed ---
+        df = _convert_to_usd(df, ticker)
 
-        # Forward fill with limit
-        df_filled = df.ffill(limit=limit)
+        # --- Step 2: Convert USD → INR ---
+        df = df.merge(usdinr, on="date", how="left")
 
-        after_nans = df_filled.isna().sum().sum()
-        filled_count = before_nans - after_nans
+        price_cols = [c for c in df.columns if any(x in c for x in ["open", "high", "low", "close", "adj_close"])]
 
-        # Save
-        save_path = os.path.join(output_dir, file)
-        df_filled.to_csv(save_path, index=False)
+        for col in price_cols:
+            df[col] = df[col] * df["fx_rate"]
 
-        print(f"{file}: filled {filled_count} NaNs (remaining: {after_nans})")
+        df.drop(columns=["fx_rate"], inplace=True)
 
-        summary.append({
-            "file": file,
-            "before_nans": before_nans,
-            "after_nans": after_nans,
-            "filled": filled_count
-        })
+        # Save back (in-place)
+        df.to_csv(path, index=False)
 
-    summary_df = pd.DataFrame(summary).sort_values(by="filled", ascending=False)
+        print(f"✔ Converted {ticker} to INR")
 
-    print("\n=== SUMMARY ===")
-    print(summary_df)
-
-    return summary_df
+    print("\n=== ALL FILES CONVERTED TO INR ===")
