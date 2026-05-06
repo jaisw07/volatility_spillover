@@ -4,7 +4,7 @@ import pandas as pd
 DATASET_DIR = "dataset"
 
 
-def check_nan_across_files(save_report: bool = True):
+def check_nan_across_files():
     """
     Step 1.2 (pre-check):
     Scan all dataset/*.csv files and report NaN statistics.
@@ -65,11 +65,6 @@ def check_nan_across_files(save_report: bool = True):
 
     print("\n=== SUMMARY (Worst First) ===")
     print(summary_df)
-
-    if save_report:
-        output_path = os.path.join(DATASET_DIR, "nan_report.csv")
-        summary_df.to_csv(output_path, index=False)
-        print(f"\nSaved report → {output_path}")
 
     return summary_df
 
@@ -171,3 +166,132 @@ def convert_all_to_inr():
         print(f"✔ Converted {ticker} to INR")
 
     print("\n=== ALL FILES CONVERTED TO INR ===")
+
+
+def check_calendar_alignment():
+    """
+    Check calendar alignment across all asset CSVs.
+
+    Outputs:
+    - Common date range
+    - Missing dates per asset
+    - Overlap statistics
+    - Returns summary dataframe
+    """
+
+    print("=== CALENDAR ALIGNMENT CHECK ===\n")
+
+    date_sets = {}
+    all_dates = set()
+
+    # --- Load all dates ---
+    for file in os.listdir(DATASET_DIR):
+        if not file.endswith(".csv"):
+            continue
+
+        ticker = file.replace(".csv", "")
+        path = os.path.join(DATASET_DIR, file)
+
+        df = pd.read_csv(path, usecols=["date"])
+        df["date"] = pd.to_datetime(df["date"])
+
+        dates = set(df["date"])
+        date_sets[ticker] = dates
+        all_dates.update(dates)
+
+    # --- Global date index ---
+    all_dates = sorted(all_dates)
+    all_dates_set = set(all_dates)
+
+    print(f"Global date range: {min(all_dates).date()} → {max(all_dates).date()}")
+    print(f"Total unique dates (union): {len(all_dates)}\n")
+
+    # --- Intersection (perfect overlap) ---
+    common_dates = set.intersection(*date_sets.values())
+    print(f"Common dates across ALL assets: {len(common_dates)}")
+    print(f"Overlap ratio: {len(common_dates) / len(all_dates):.4f}\n")
+
+    # --- Per asset gaps ---
+    summary = []
+
+    for ticker, dates in date_sets.items():
+        missing = all_dates_set - dates
+        missing_pct = (len(missing) / len(all_dates)) * 100
+
+        print(f"{ticker}:")
+        print(f"  available: {len(dates)}")
+        print(f"  missing: {len(missing)} ({missing_pct:.2f}%)")
+
+        # Show first few missing dates for debugging
+        if len(missing) > 0:
+            sample = sorted(list(missing))[:5]
+            print(f"  sample missing: {[d.date() for d in sample]}")
+
+        print("-" * 40)
+
+        summary.append({
+            "ticker": ticker,
+            "available_dates": len(dates),
+            "missing_dates": len(missing),
+            "missing_pct": missing_pct
+        })
+
+    summary_df = pd.DataFrame(summary).sort_values(by="missing_pct", ascending=False)
+
+    print("\n=== SUMMARY (Worst Alignment First) ===")
+    print(summary_df)
+
+    return summary_df
+
+def keep_common_dates():
+    """
+    Restrict all asset files to only common overlapping dates.
+
+    This ensures:
+    - Perfect calendar alignment
+    - No need for forward-fill later
+    - Clean input for VAR / DCC
+
+    WARNING:
+    - Drops non-overlapping dates (weekends, holidays, etc.)
+    """
+
+    print("=== KEEPING ONLY COMMON DATES ACROSS ALL ASSETS ===\n")
+
+    date_sets = {}
+    dfs = {}
+
+    # --- Load all datasets ---
+    for file in os.listdir(DATASET_DIR):
+        if not file.endswith(".csv"):
+            continue
+
+        ticker = file.replace(".csv", "")
+        path = os.path.join(DATASET_DIR, file)
+
+        df = pd.read_csv(path)
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date")
+
+        dfs[ticker] = df
+        date_sets[ticker] = set(df["date"])
+
+    # --- Compute intersection ---
+    common_dates = sorted(set.intersection(*date_sets.values()))
+    common_dates = pd.to_datetime(common_dates)
+
+    print(f"Common dates retained: {len(common_dates)}")
+
+    # --- Filter each dataset ---
+    for ticker, df in dfs.items():
+        before = len(df)
+
+        df_filtered = df[df["date"].isin(common_dates)].copy()
+        after = len(df_filtered)
+
+        path = os.path.join(DATASET_DIR, f"{ticker}.csv")
+        df_filtered.to_csv(path, index=False)
+
+        print(f"{ticker}: {before} → {after} rows")
+
+    print("\n=== ALL FILES NOW PERFECTLY ALIGNED ===")
