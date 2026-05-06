@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 DATASET_DIR = "dataset"
+INSIGHTS_DIR = "insights"
 
 
 def plot_global_log_returns(batch_size: int = 4):
@@ -155,10 +156,17 @@ def detect_crypto_crashes(window: int = 5, min_duration: int = 5, plot: bool = T
     """
     Detect crash periods for BTC and ETH using realized volatility.
 
+    Saves:
+    - insights/crash_flags_<ticker>.csv
+    - insights/crash_periods_<ticker>.csv
+    - insights/crash_summary.csv
+
     Returns:
-    - summary_df (threshold + total crash days)
-    - crash_periods_dict (start/end per asset)
+    - summary_df
+    - crash_periods_dict
     """
+
+    os.makedirs(INSIGHTS_DIR, exist_ok=True)
 
     TARGET = ["BTC-USD", "ETH-USD"]
 
@@ -180,7 +188,7 @@ def detect_crypto_crashes(window: int = 5, min_duration: int = 5, plot: bool = T
         # --- realized volatility ---
         df["rv"] = df["log_ret"].rolling(window).std() * np.sqrt(252)
 
-        # drop initial NaNs (important)
+        # drop initial NaNs
         df = df.dropna(subset=["rv"]).copy()
 
         # --- threshold ---
@@ -204,23 +212,31 @@ def detect_crypto_crashes(window: int = 5, min_duration: int = 5, plot: bool = T
                     "length": len(g)
                 })
 
-        crash_periods[ticker] = pd.DataFrame(periods)
+        # --- Save crash flags (clean minimal dataset) ---
+        flag_df = df[["date", "rv", "crash_flag"]].copy()
+        flag_path = os.path.join(INSIGHTS_DIR, f"crash_flags_{ticker}.csv")
+        flag_df.to_csv(flag_path, index=False)
 
+        # --- Save crash periods ---
+        periods_df = pd.DataFrame(periods)
+        periods_path = os.path.join(INSIGHTS_DIR, f"crash_periods_{ticker}.csv")
+        periods_df.to_csv(periods_path, index=False)
+
+        crash_periods[ticker] = periods_df
+
+        # --- Summary ---
         summary.append({
             "asset": ticker,
             "threshold": threshold,
-            "crash_days": df["crash_flag"].sum(),
+            "crash_days": int(df["crash_flag"].sum()),
             "num_periods": len(periods)
         })
 
         print(f"\n=== {ticker} ===")
         print(f"Threshold: {threshold:.4f}")
         print(f"Crash days: {df['crash_flag'].sum()}")
-        print(f"Crash periods: {len(periods)}")
-
-        if len(periods) > 0:
-            print("Sample periods:")
-            print(crash_periods[ticker].head())
+        print(f"Saved flags → {flag_path}")
+        print(f"Saved periods → {periods_path}")
 
         # --- Plot ---
         if plot:
@@ -247,9 +263,13 @@ def detect_crypto_crashes(window: int = 5, min_duration: int = 5, plot: bool = T
             plt.tight_layout()
             plt.show()
 
+    # --- Save summary ---
     summary_df = pd.DataFrame(summary)
+    summary_path = os.path.join(INSIGHTS_DIR, "crash_summary.csv")
+    summary_df.to_csv(summary_path, index=False)
 
     print("\n=== SUMMARY ===")
     print(summary_df)
+    print(f"\nSaved summary → {summary_path}")
 
     return summary_df, crash_periods
