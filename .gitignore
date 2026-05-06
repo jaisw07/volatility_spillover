@@ -1,0 +1,5 @@
+*.pdf
+dataset
+__marimo__
+.vscode
+__pycache__
