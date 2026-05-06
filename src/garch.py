@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 from arch import arch_model
 from statsmodels.stats.diagnostic import het_arch
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 INSIGHTS_DIR = "insights"
 
@@ -269,3 +271,384 @@ def run_dcc_garch(save: bool = True):
         print(f"Saved → {summary_path}")
 
     return corr_df, summary_df
+
+# =========================================================
+# VISUALIZATION HELPERS
+# =========================================================
+
+GLOBAL_STOCKS = [
+    "^GSPC",
+    "^GSPTSE",
+    "^HSI",
+    "^BVSP",
+    "^AXJO"
+]
+
+
+def _load_dcc_data():
+    path = os.path.join(INSIGHTS_DIR, "dcc_correlations.csv")
+
+    df = pd.read_csv(path)
+    df["date"] = pd.to_datetime(df["date"])
+
+    return df
+
+
+def _resolve_pair_column(columns, asset1, asset2):
+    """
+    Resolve pair column irrespective of ordering.
+    """
+
+    pair1 = f"{asset1}__{asset2}"
+    pair2 = f"{asset2}__{asset1}"
+
+    if pair1 in columns:
+        return pair1
+
+    if pair2 in columns:
+        return pair2
+
+    return None
+
+
+def _highlight_crashes(ax, df):
+    """
+    Highlight crash periods using shaded regions.
+    """
+
+    crash_mask = df["crash_combined"] == 1
+
+    in_crash = False
+    start_date = None
+
+    for i in range(len(df)):
+
+        if crash_mask.iloc[i] and not in_crash:
+            in_crash = True
+            start_date = df["date"].iloc[i]
+
+        elif not crash_mask.iloc[i] and in_crash:
+            end_date = df["date"].iloc[i]
+
+            ax.axvspan(
+                start_date,
+                end_date,
+                alpha=0.2,
+                color="#DB2020"
+            )
+
+            in_crash = False
+
+    # handle ending crash regime
+    if in_crash:
+        ax.axvspan(
+            start_date,
+            df["date"].iloc[-1],
+            alpha=0.2,
+            color="#DB2020"
+        )
+
+
+# =========================================================
+# 1. AVERAGE SYSTEM CORRELATION
+# =========================================================
+
+def plot_avg_system_correlation():
+    """
+    Plot average system-wide correlation over time.
+    """
+
+    df = _load_dcc_data()
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    ax.plot(
+        df["date"],
+        df["avg_system_corr"],
+        linewidth=2
+    )
+
+    _highlight_crashes(ax, df)
+
+    ax.set_title("Average System Correlation Over Time")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Average Correlation")
+
+    ax.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+
+# =========================================================
+# 2. DELTA CORRELATION HEATMAPS
+# =========================================================
+
+def plot_dcc_delta_heatmaps():
+    """
+    Create 3 side-by-side heatmaps:
+    1. BTC vs all
+    2. ETH vs all
+    3. GOLD vs all
+
+    Uses shared/global color scale.
+    """
+
+    path = os.path.join(INSIGHTS_DIR, "dcc_summary.csv")
+    df = pd.read_csv(path)
+
+    def get_delta(asset1, asset2):
+
+        pair1 = f"{asset1}__{asset2}"
+        pair2 = f"{asset2}__{asset1}"
+
+        row = df[df["pair"] == pair1]
+
+        if row.empty:
+            row = df[df["pair"] == pair2]
+
+        if row.empty:
+            return np.nan
+
+        return row["delta_corr"].values[0]
+
+    btc_assets = GLOBAL_STOCKS + ["GC=F", "ETH-USD"]
+    eth_assets = GLOBAL_STOCKS + ["GC=F", "BTC-USD"]
+    gold_assets = GLOBAL_STOCKS + ["BTC-USD", "ETH-USD"]
+
+    btc_vals = [get_delta("BTC-USD", a) for a in btc_assets]
+    eth_vals = [get_delta("ETH-USD", a) for a in eth_assets]
+    gold_vals = [get_delta("GC=F", a) for a in gold_assets]
+
+    vmin = min(
+        np.nanmin(btc_vals),
+        np.nanmin(eth_vals),
+        np.nanmin(gold_vals)
+    )
+
+    vmax = max(
+        np.nanmax(btc_vals),
+        np.nanmax(eth_vals),
+        np.nanmax(gold_vals)
+    )
+
+    fig, axes = plt.subplots(
+        1,
+        3,
+        figsize=(18, 6),
+        sharey=False
+    )
+
+    heatmaps = [
+        (
+            axes[0],
+            pd.DataFrame(
+                {"Delta": btc_vals},
+                index=btc_assets
+            ),
+            "BTC vs Assets"
+        ),
+        (
+            axes[1],
+            pd.DataFrame(
+                {"Delta": eth_vals},
+                index=eth_assets
+            ),
+            "ETH vs Assets"
+        ),
+        (
+            axes[2],
+            pd.DataFrame(
+                {"Delta": gold_vals},
+                index=gold_assets
+            ),
+            "Gold vs Assets"
+        )
+    ]
+
+    for ax, data, title in heatmaps:
+
+        sns.heatmap(
+            data,
+            annot=True,
+            cmap="coolwarm",
+            center=0,
+            fmt=".3f",
+            vmin=vmin,
+            vmax=vmax,
+            cbar=ax == axes[-1],
+            ax=ax
+        )
+
+        ax.set_title(title)
+
+    plt.suptitle(
+        "Crash vs Normal Correlation Change (Delta)",
+        fontsize=14
+    )
+
+    plt.tight_layout()
+    plt.show()
+
+
+# =========================================================
+# 3. BTC vs ETH DYNAMIC CORRELATION
+# =========================================================
+
+def plot_btc_eth_dcc():
+    """
+    Plot BTC-ETH dynamic correlation.
+    """
+
+    df = _load_dcc_data()
+
+    pair = _resolve_pair_column(
+        df.columns,
+        "BTC-USD",
+        "ETH-USD"
+    )
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    ax.plot(
+        df["date"],
+        df[pair],
+        linewidth=2
+    )
+
+    _highlight_crashes(ax, df)
+
+    ax.set_title("BTC vs ETH Dynamic Correlation")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("DCC Correlation")
+
+    ax.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+
+# =========================================================
+# 4. CRYPTO VS EQUITY (6 SEPARATE PLOTS)
+# =========================================================
+
+def plot_crypto_equity_dcc():
+    """
+    Create 6 plots:
+    BTC vs Asset
+    ETH vs Asset
+
+    One subplot per asset:
+    - 5 global equities
+    - Gold
+    """
+
+    df = _load_dcc_data()
+
+    assets = GLOBAL_STOCKS + ["GC=F"]
+
+    fig, axes = plt.subplots(
+        3,
+        2,
+        figsize=(16, 14),
+        sharex=True
+    )
+
+    axes = axes.flatten()
+
+    for idx, asset in enumerate(assets):
+
+        ax = axes[idx]
+
+        btc_pair = _resolve_pair_column(
+            df.columns,
+            "BTC-USD",
+            asset
+        )
+
+        eth_pair = _resolve_pair_column(
+            df.columns,
+            "ETH-USD",
+            asset
+        )
+
+        if btc_pair:
+            ax.plot(
+                df["date"],
+                df[btc_pair],
+                label="BTC",
+                linewidth=2
+            )
+
+        if eth_pair:
+            ax.plot(
+                df["date"],
+                df[eth_pair],
+                label="ETH",
+                linewidth=2
+            )
+
+        _highlight_crashes(ax, df)
+
+        ax.set_title(asset)
+        ax.set_ylabel("Correlation")
+
+        ax.grid(True)
+        ax.legend()
+
+    plt.suptitle(
+        "Crypto vs Equity Dynamic Correlations",
+        fontsize=16
+    )
+
+    plt.tight_layout()
+    plt.show()
+
+
+# =========================================================
+# 5. GOLD SAFE HAVEN PLOT
+# =========================================================
+
+def plot_gold_safe_haven():
+    """
+    Plot Gold correlations against all equities.
+    """
+
+    df = _load_dcc_data()
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    for asset in GLOBAL_STOCKS:
+
+        pair = _resolve_pair_column(
+            df.columns,
+            "GC=F",
+            asset
+        )
+
+        if pair is None:
+            continue
+
+        ax.plot(
+            df["date"],
+            df[pair],
+            label=asset
+        )
+
+    _highlight_crashes(ax, df)
+
+    ax.axhline(
+        0,
+        linestyle="--",
+        linewidth=1
+    )
+
+    ax.set_title("Gold vs Equity Dynamic Correlations")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("DCC Correlation")
+
+    ax.legend()
+    ax.grid(True)
+
+    plt.tight_layout()
+    plt.show()
