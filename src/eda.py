@@ -150,3 +150,106 @@ def plot_realized_volatility(window: int = 5, batch_size: int = 4):
 
         plt.tight_layout()
         plt.show()
+
+def detect_crypto_crashes(window: int = 5, min_duration: int = 5, plot: bool = True):
+    """
+    Detect crash periods for BTC and ETH using realized volatility.
+
+    Returns:
+    - summary_df (threshold + total crash days)
+    - crash_periods_dict (start/end per asset)
+    """
+
+    TARGET = ["BTC-USD", "ETH-USD"]
+
+    summary = []
+    crash_periods = {}
+
+    for ticker in TARGET:
+        path = os.path.join(DATASET_DIR, f"{ticker}.csv")
+
+        df = pd.read_csv(path)
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date")
+
+        adj_col = [c for c in df.columns if "adj_close" in c][0]
+
+        # --- returns ---
+        df["log_ret"] = np.log(df[adj_col] / df[adj_col].shift(1))
+
+        # --- realized volatility ---
+        df["rv"] = df["log_ret"].rolling(window).std() * np.sqrt(252)
+
+        # drop initial NaNs (important)
+        df = df.dropna(subset=["rv"]).copy()
+
+        # --- threshold ---
+        threshold = df["rv"].quantile(0.90)
+
+        df["high_vol"] = (df["rv"] > threshold).astype(int)
+
+        # --- consecutive grouping ---
+        df["group"] = (df["high_vol"] != df["high_vol"].shift()).cumsum()
+
+        df["crash_flag"] = 0
+        periods = []
+
+        for _, g in df.groupby("group"):
+            if g["high_vol"].iloc[0] == 1 and len(g) >= min_duration:
+                df.loc[g.index, "crash_flag"] = 1
+
+                periods.append({
+                    "start": g["date"].iloc[0],
+                    "end": g["date"].iloc[-1],
+                    "length": len(g)
+                })
+
+        crash_periods[ticker] = pd.DataFrame(periods)
+
+        summary.append({
+            "asset": ticker,
+            "threshold": threshold,
+            "crash_days": df["crash_flag"].sum(),
+            "num_periods": len(periods)
+        })
+
+        print(f"\n=== {ticker} ===")
+        print(f"Threshold: {threshold:.4f}")
+        print(f"Crash days: {df['crash_flag'].sum()}")
+        print(f"Crash periods: {len(periods)}")
+
+        if len(periods) > 0:
+            print("Sample periods:")
+            print(crash_periods[ticker].head())
+
+        # --- Plot ---
+        if plot:
+            plt.figure(figsize=(14, 6))
+
+            plt.plot(df["date"], df["rv"], linewidth=1.2, label="Volatility")
+            plt.axhline(threshold, linestyle="--", linewidth=1, label="90th pct")
+
+            crash_df = df[df["crash_flag"] == 1]
+            plt.scatter(
+                crash_df["date"],
+                crash_df["rv"],
+                s=10,
+                label="Crash",
+                alpha=0.7,
+                color="red"
+            )
+
+            plt.title(f"{ticker} Realized Volatility & Crash Periods",
+                      fontsize=13, fontweight="bold")
+
+            plt.legend(frameon=False)
+            plt.grid(alpha=0.25)
+            plt.tight_layout()
+            plt.show()
+
+    summary_df = pd.DataFrame(summary)
+
+    print("\n=== SUMMARY ===")
+    print(summary_df)
+
+    return summary_df, crash_periods
