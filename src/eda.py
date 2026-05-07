@@ -8,10 +8,8 @@ INSIGHTS_DIR = "insights"
 
 CRASH_WINDOWS = {
     "COVID Crash": ("2020-03-01", "2020-04-15"),
-    "China Ban + Tesla": ("2021-05-01", "2021-06-30"),
     "LUNA Collapse": ("2022-05-01", "2022-06-30"),
-    "FTX Collapse": ("2022-11-01", "2022-12-15"),
-    "Yen Carry Trade": ("2024-08-01", "2024-09-01")
+    "FTX Collapse": ("2022-11-01", "2022-12-15")
 }
 
 def _highlight_crashes(ax):
