@@ -78,20 +78,30 @@ FX_MAP = {
 }
 
 
+def _get_price_column(df: pd.DataFrame) -> str:
+    """Pick best available price column with auto_adjust compatibility."""
+
+    for name in ("adj_close", "close"):
+        matches = [c for c in df.columns if name in c]
+        if matches:
+            return matches[0]
+
+    raise ValueError("No price column found (expected adj_close or close)")
+
+
 def _load_fx_series(fx_ticker):
     """
     Load FX series and return (date, rate)
-    Uses adj_close as FX rate
+    Uses adj_close or close as FX rate
     """
     path = os.path.join(DATASET_DIR, f"{fx_ticker}.csv")
     df = pd.read_csv(path)
 
     df["date"] = pd.to_datetime(df["date"])
 
-    # Find adj_close column dynamically
-    adj_col = [c for c in df.columns if "adj_close" in c][0]
+    price_col = _get_price_column(df)
 
-    return df[["date", adj_col]].rename(columns={adj_col: "fx_rate"})
+    return df[["date", price_col]].rename(columns={price_col: "fx_rate"})
 
 
 def _convert_to_usd(df, ticker):
@@ -154,7 +164,7 @@ def convert_all_to_inr():
         # --- Step 2: Convert USD → INR ---
         df = df.merge(usdinr, on="date", how="left")
 
-        price_cols = [c for c in df.columns if any(x in c for x in ["open", "high", "low", "close", "adj_close"])]
+        price_cols = [c for c in df.columns if any(x in c for x in ["open", "high", "low", "close"])]
 
         for col in price_cols:
             df[col] = df[col] * df["fx_rate"]
@@ -297,14 +307,20 @@ def keep_common_dates():
 
     print("\n=== ALL FILES NOW PERFECTLY ALIGNED ===")
 
-def build_unified_matrix(window: int = 5, save: bool = True):
+def build_unified_matrix(window: int = 21, save: bool = True):
     """
     Build unified feature matrix for all assets.
 
     Includes:
     - Log returns
     - Realized volatility
-    - Crash flags (BTC, ETH, combined)
+
+    Assets:
+    - Crypto
+    - Global equities
+    - NSEI
+    - Gold
+    - USDINR
 
     Saves:
     - insights/unified.csv
@@ -312,7 +328,6 @@ def build_unified_matrix(window: int = 5, save: bool = True):
 
     os.makedirs(INSIGHTS_DIR, exist_ok=True)
 
-    # --- Target assets (exclude FX except USDINR if needed later) ---
     TARGET = [
         "BTC-USD",
         "ETH-USD",
@@ -321,14 +336,15 @@ def build_unified_matrix(window: int = 5, save: bool = True):
         "^HSI",
         "^BVSP",
         "^AXJO",
-        "^NSEI",     # included but can be filtered later
+        "^NSEI",
         "GC=F",
-        "USDINR=X"   # included but optional in global stage
+        "USDINR=X"
     ]
 
     unified_df = None
 
     for ticker in TARGET:
+
         path = os.path.join(DATASET_DIR, f"{ticker}.csv")
 
         if not os.path.exists(path):
@@ -336,59 +352,56 @@ def build_unified_matrix(window: int = 5, save: bool = True):
             continue
 
         df = pd.read_csv(path)
+
         df["date"] = pd.to_datetime(df["date"])
         df = df.sort_values("date")
 
-        adj_col = [c for c in df.columns if "adj_close" in c][0]
+        price_col = _get_price_column(df)
 
-        # --- returns ---
-        df[f"ret_{ticker}"] = np.log(df[adj_col] / df[adj_col].shift(1))
-
-        # --- volatility ---
-        df[f"vol_{ticker}"] = (
-            df[f"ret_{ticker}"].rolling(window).std() * np.sqrt(252)
+        # --- Log Returns ---
+        df[f"ret_{ticker}"] = np.log(
+            df[price_col] / df[price_col].shift(1)
         )
 
-        df = df[["date", f"ret_{ticker}", f"vol_{ticker}"]]
+        # --- Realized Volatility ---
+        df[f"vol_{ticker}"] = (
+            df[f"ret_{ticker}"]
+            .rolling(window)
+            .std()
+            * np.sqrt(252)
+        )
 
-        # --- merge ---
+        df = df[
+            [
+                "date",
+                f"ret_{ticker}",
+                f"vol_{ticker}"
+            ]
+        ]
+
+        # --- Merge ---
         if unified_df is None:
             unified_df = df
         else:
-            unified_df = unified_df.merge(df, on="date", how="inner")
+            unified_df = unified_df.merge(
+                df,
+                on="date",
+                how="inner"
+            )
 
-    # --- Load crash flags ---
-    btc_flags = pd.read_csv(os.path.join(INSIGHTS_DIR, "crash_flags_BTC-USD.csv"))
-    eth_flags = pd.read_csv(os.path.join(INSIGHTS_DIR, "crash_flags_ETH-USD.csv"))
-
-    btc_flags["date"] = pd.to_datetime(btc_flags["date"])
-    eth_flags["date"] = pd.to_datetime(eth_flags["date"])
-
-    btc_flags = btc_flags[["date", "crash_flag"]].rename(
-        columns={"crash_flag": "crash_btc"}
-    )
-
-    eth_flags = eth_flags[["date", "crash_flag"]].rename(
-        columns={"crash_flag": "crash_eth"}
-    )
-
-    # --- merge crash flags ---
-    unified_df = unified_df.merge(btc_flags, on="date", how="inner")
-    unified_df = unified_df.merge(eth_flags, on="date", how="inner")
-
-    # --- combined crash ---
-    unified_df["crash_combined"] = (
-        (unified_df["crash_btc"] == 1) |
-        (unified_df["crash_eth"] == 1)
-    ).astype(int)
-
-    # --- drop NaNs from rolling ---
+    # --- Final cleanup ---
     unified_df = unified_df.dropna().reset_index(drop=True)
 
-    # --- save ---
+    # --- Save ---
     if save:
-        save_path = os.path.join(INSIGHTS_DIR, "unified.csv")
+
+        save_path = os.path.join(
+            INSIGHTS_DIR,
+            "unified.csv"
+        )
+
         unified_df.to_csv(save_path, index=False)
+
         print(f"Saved unified matrix → {save_path}")
 
     print("\n=== UNIFIED MATRIX INFO ===")

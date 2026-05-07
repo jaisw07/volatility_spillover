@@ -50,8 +50,8 @@ def fetch_and_store_ticker(ticker: str, start: str = START_DATE, end: str = END_
             start=start,
             end=end,
             interval="1d",
-            auto_adjust=False,
-            progress=False
+            auto_adjust=True,
+            progress=True
         )
 
         if df.empty:
@@ -77,6 +77,17 @@ def fetch_and_store_ticker(ticker: str, start: str = START_DATE, end: str = END_
                 normalized_cols.append(str(col).lower().replace(" ", "_"))
             df.columns = normalized_cols
 
+        # Standardize OHLCV column names to include ticker suffix
+        # Example: close_^axjo, high_^axjo, ...
+        suffix = ticker.lower()
+        rename_map = {}
+        for col in ("open", "high", "low", "close", "adj_close", "volume"):
+            if col in df.columns:
+                rename_map[col] = f"{col}_{suffix}"
+
+        if rename_map:
+            df.rename(columns=rename_map, inplace=True)
+
         # Add ticker column for traceability
         df["ticker"] = ticker
 
@@ -100,9 +111,9 @@ def download_assets():
     - Store each as separate CSV in dataset/
     """
 
-    print("=== STEP 1.1: Asset Price Data Collection START ===")
+    print("=== Asset Price Data Collection ===")
 
     for ticker in ASSETS.keys():
         fetch_and_store_ticker(ticker)
 
-    print("=== STEP 1.1 COMPLETE ===")
+    print("=== Data Collection Complete ===")
