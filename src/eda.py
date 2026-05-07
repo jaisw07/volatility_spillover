@@ -181,6 +181,8 @@ def plot_realized_volatility(window: int = 21, batch_size: int = 4):
         plt.ylabel("Volatility", fontsize=11)
 
         plt.legend(loc="upper right", fontsize=10, frameon=False)
+        ax = plt.gca()
+        _highlight_crashes(ax)
         plt.grid(alpha=0.25)
 
         plt.tight_layout()
