@@ -23,7 +23,7 @@ def _highlight_crashes(ax):
             pd.to_datetime(start),
             pd.to_datetime(end),
             color="red",
-            alpha=0.15
+            alpha=0.20
         )
 
 def _get_price_column(df: pd.DataFrame) -> str:

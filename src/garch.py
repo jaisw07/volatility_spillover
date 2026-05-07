@@ -8,111 +8,178 @@ import seaborn as sns
 
 INSIGHTS_DIR = "insights"
 
+CRASH_WINDOWS = {
+    "COVID Crash": ("2020-03-01", "2020-04-15"),
+    "LUNA Collapse": ("2022-05-01", "2022-06-30"),
+    "FTX Collapse": ("2022-11-01", "2022-12-15")
+}
 
 def run_univariate_garch(save: bool = True):
-    """
-    Step 2.1: Univariate GARCH(1,1) per asset (GLOBAL ONLY)
 
-    Updates:
-    - Removes NSEI and USDINR
-    - Uses expanding mean (lagged) as expected return
-    - Handles scaling cleanly
+    """
+    Univariate GARCH(1,1) for ALL assets.
+
+    Includes:
+    - Crypto
+    - Global equities
+    - NSEI
+    - Gold
+    - USDINR
 
     Outputs:
     - standardized residuals
     - conditional volatility
-    - summary diagnostics
+    - diagnostics summary
     """
 
     path = os.path.join(INSIGHTS_DIR, "unified.csv")
+
     df = pd.read_csv(path)
+
     df["date"] = pd.to_datetime(df["date"])
 
-    # --- Select ONLY global assets ---
     ret_cols = [
         c for c in df.columns
         if c.startswith("ret_")
-        and "NSEI" not in c
-        and "USDINR" not in c
     ]
 
-    residuals_df = pd.DataFrame({"date": df["date"]})
-    vol_df = pd.DataFrame({"date": df["date"]})
+    residuals_df = pd.DataFrame({
+        "date": df["date"]
+    })
+
+    vol_df = pd.DataFrame({
+        "date": df["date"]
+    })
 
     summary_rows = []
 
-    print("=== RUNNING GARCH(1,1) FOR GLOBAL ASSETS ===\n")
+    print("=== RUNNING UNIVARIATE GARCH ===\n")
 
     for col in ret_cols:
+
         asset = col.replace("ret_", "")
 
         print(f"Processing {asset}...")
 
         series = df[col].copy()
 
-        # --- Expected return (expanding mean, lagged) ---
-        exp_mean = series.expanding().mean().shift(1)
+        # expanding mean
+        exp_mean = (
+            series
+            .expanding()
+            .mean()
+            .shift(1)
+        )
 
-        # demeaned returns
-        series_dm = (series - exp_mean).dropna()
+        series_dm = (
+            series - exp_mean
+        ).dropna()
 
-        # --- ARCH test ---
-        arch_test = het_arch(series_dm, nlags=5)
+        # ARCH effect test
+        arch_test = het_arch(
+            series_dm,
+            nlags=5
+        )
+
         arch_pval = arch_test[1]
 
-        # --- GARCH fit (scaled) ---
+        # GARCH fit
         model = arch_model(
-            series_dm * 100,   # scale for stability
-            mean="Zero",       # already demeaned
+            series_dm * 100,
+            mean="Zero",
             vol="GARCH",
             p=1,
             q=1,
-            dist="normal"
+            dist="t"
         )
 
-        res = model.fit(disp="off")
+        res = model.fit(
+            disp="off"
+        )
 
-        # --- Extract ---
-        cond_vol = res.conditional_volatility / 100
-        std_resid = res.resid / res.conditional_volatility
+        cond_vol = (
+            res.conditional_volatility / 100
+        )
 
-        # Align index properly
+        std_resid = (
+            res.resid / res.conditional_volatility
+        )
+
         cond_vol.index = series_dm.index
         std_resid.index = series_dm.index
 
-        # --- Store ---
-        residuals_df[f"resid_{asset}"] = std_resid
-        vol_df[f"garch_vol_{asset}"] = cond_vol
+        residuals_df[
+            f"resid_{asset}"
+        ] = std_resid
+
+        vol_df[
+            f"garch_vol_{asset}"
+        ] = cond_vol
+
+        alpha = res.params.get(
+            "alpha[1]",
+            np.nan
+        )
+
+        beta = res.params.get(
+            "beta[1]",
+            np.nan
+        )
 
         summary_rows.append({
             "asset": asset,
             "arch_pval": arch_pval,
-            "omega": res.params.get("omega", np.nan),
-            "alpha": res.params.get("alpha[1]", np.nan),
-            "beta": res.params.get("beta[1]", np.nan),
-            "alpha_beta": res.params.get("alpha[1]", 0) + res.params.get("beta[1]", 0)
+            "omega": res.params.get(
+                "omega",
+                np.nan
+            ),
+            "nu": res.params.get(
+                "nu",
+                np.nan
+            ),
+            "alpha": alpha,
+            "beta": beta,
+            "alpha_beta": alpha + beta
         })
 
-    summary_df = pd.DataFrame(summary_rows)
+    summary_df = pd.DataFrame(
+        summary_rows
+    )
 
     print("\n=== GARCH SUMMARY ===")
     print(summary_df)
 
-    # --- Save ---
     if save:
-        residuals_path = os.path.join(INSIGHTS_DIR, "garch_residuals.csv")
-        vol_path = os.path.join(INSIGHTS_DIR, "garch_volatility.csv")
-        summary_path = os.path.join(INSIGHTS_DIR, "garch_summary.csv")
 
-        residuals_df.to_csv(residuals_path, index=False)
-        vol_df.to_csv(vol_path, index=False)
-        summary_df.to_csv(summary_path, index=False)
+        residuals_df.to_csv(
+            os.path.join(
+                INSIGHTS_DIR,
+                "garch_residuals.csv"
+            ),
+            index=False
+        )
 
-        print(f"\nSaved → {residuals_path}")
-        print(f"Saved → {vol_path}")
-        print(f"Saved → {summary_path}")
+        vol_df.to_csv(
+            os.path.join(
+                INSIGHTS_DIR,
+                "garch_volatility.csv"
+            ),
+            index=False
+        )
 
-    return residuals_df, vol_df, summary_df
+        summary_df.to_csv(
+            os.path.join(
+                INSIGHTS_DIR,
+                "garch_summary.csv"
+            ),
+            index=False
+        )
+
+    return (
+        residuals_df,
+        vol_df,
+        summary_df
+    )
 
 def run_dcc_garch(save: bool = True):
     """
@@ -217,14 +284,6 @@ def run_dcc_garch(save: bool = True):
     # --- Add average system correlation ---
     corr_df["avg_system_corr"] = avg_corr_series
 
-    # --- Merge crash regime ---
-    crash_cols = ["date", "crash_combined"]
-
-    crash_df = unified_df[crash_cols].copy()
-
-    corr_df = corr_df.merge(crash_df, on="date", how="inner")
-
-    # --- Crash vs non-crash summary ---
     summary_rows = []
 
     pair_cols = [
@@ -234,30 +293,36 @@ def run_dcc_garch(save: bool = True):
 
     for pair in pair_cols:
 
-        crash_mean = corr_df.loc[
-            corr_df["crash_combined"] == 1,
-            pair
-        ].mean()
+        full_mean = corr_df[pair].mean()
 
-        normal_mean = corr_df.loc[
-            corr_df["crash_combined"] == 0,
-            pair
-        ].mean()
-
-        delta = crash_mean - normal_mean
-
-        summary_rows.append({
+        row = {
             "pair": pair,
-            "normal_corr": normal_mean,
-            "crash_corr": crash_mean,
-            "delta_corr": delta
-        })
+            "full_sample_corr": full_mean
+        }
+
+        for regime, (start, end) in CRASH_WINDOWS.items():
+
+            mask = (
+                (corr_df["date"] >= pd.to_datetime(start))
+                &
+                (corr_df["date"] <= pd.to_datetime(end))
+            )
+
+            regime_mean = corr_df.loc[
+                mask,
+                pair
+            ].mean()
+
+            row[
+                regime.replace(" ", "_").lower()
+            ] = regime_mean
+
+        summary_rows.append(row)
 
     summary_df = pd.DataFrame(summary_rows)
-
     print("\n=== DCC SUMMARY ===")
-    print(summary_df.sort_values("delta_corr", ascending=False).head())
-
+    print(summary_df.head())
+    
     # --- Save ---
     if save:
 
@@ -281,7 +346,9 @@ GLOBAL_STOCKS = [
     "^GSPTSE",
     "^HSI",
     "^BVSP",
-    "^AXJO"
+    "^AXJO",
+    "^NSEI",
+    "USDINR=X"
 ]
 
 
@@ -311,43 +378,16 @@ def _resolve_pair_column(columns, asset1, asset2):
     return None
 
 
-def _highlight_crashes(ax, df):
-    """
-    Highlight crash periods using shaded regions.
-    """
+def _highlight_crashes(ax):
 
-    crash_mask = df["crash_combined"] == 1
+    for label, (start, end) in CRASH_WINDOWS.items():
 
-    in_crash = False
-    start_date = None
-
-    for i in range(len(df)):
-
-        if crash_mask.iloc[i] and not in_crash:
-            in_crash = True
-            start_date = df["date"].iloc[i]
-
-        elif not crash_mask.iloc[i] and in_crash:
-            end_date = df["date"].iloc[i]
-
-            ax.axvspan(
-                start_date,
-                end_date,
-                alpha=0.2,
-                color="#DB2020"
-            )
-
-            in_crash = False
-
-    # handle ending crash regime
-    if in_crash:
         ax.axvspan(
-            start_date,
-            df["date"].iloc[-1],
-            alpha=0.2,
-            color="#DB2020"
+            pd.to_datetime(start),
+            pd.to_datetime(end),
+            color="#DB2020",
+            alpha=0.20
         )
-
 
 # =========================================================
 # 1. AVERAGE SYSTEM CORRELATION
@@ -368,7 +408,7 @@ def plot_avg_system_correlation():
         linewidth=2
     )
 
-    _highlight_crashes(ax, df)
+    _highlight_crashes(ax)
 
     ax.set_title("Average System Correlation Over Time")
     ax.set_xlabel("Date")
@@ -384,111 +424,75 @@ def plot_avg_system_correlation():
 # 2. DELTA CORRELATION HEATMAPS
 # =========================================================
 
-def plot_dcc_delta_heatmaps():
-    """
-    Create 3 side-by-side heatmaps:
-    1. BTC vs all
-    2. ETH vs all
-    3. GOLD vs all
+def plot_regime_correlation_heatmaps():
 
-    Uses shared/global color scale.
+    """
+    Heatmaps of average DCC correlations
+    during each stress regime.
     """
 
-    path = os.path.join(INSIGHTS_DIR, "dcc_summary.csv")
+    path = os.path.join(
+        INSIGHTS_DIR,
+        "dcc_summary.csv"
+    )
+
     df = pd.read_csv(path)
 
-    def get_delta(asset1, asset2):
-
-        pair1 = f"{asset1}__{asset2}"
-        pair2 = f"{asset2}__{asset1}"
-
-        row = df[df["pair"] == pair1]
-
-        if row.empty:
-            row = df[df["pair"] == pair2]
-
-        if row.empty:
-            return np.nan
-
-        return row["delta_corr"].values[0]
-
-    btc_assets = GLOBAL_STOCKS + ["GC=F", "ETH-USD"]
-    eth_assets = GLOBAL_STOCKS + ["GC=F", "BTC-USD"]
-    gold_assets = GLOBAL_STOCKS + ["BTC-USD", "ETH-USD"]
-
-    btc_vals = [get_delta("BTC-USD", a) for a in btc_assets]
-    eth_vals = [get_delta("ETH-USD", a) for a in eth_assets]
-    gold_vals = [get_delta("GC=F", a) for a in gold_assets]
-
-    vmin = min(
-        np.nanmin(btc_vals),
-        np.nanmin(eth_vals),
-        np.nanmin(gold_vals)
-    )
-
-    vmax = max(
-        np.nanmax(btc_vals),
-        np.nanmax(eth_vals),
-        np.nanmax(gold_vals)
-    )
-
-    fig, axes = plt.subplots(
-        1,
-        3,
-        figsize=(18, 6),
-        sharey=False
-    )
-
-    heatmaps = [
-        (
-            axes[0],
-            pd.DataFrame(
-                {"Delta": btc_vals},
-                index=btc_assets
-            ),
-            "BTC vs Assets"
-        ),
-        (
-            axes[1],
-            pd.DataFrame(
-                {"Delta": eth_vals},
-                index=eth_assets
-            ),
-            "ETH vs Assets"
-        ),
-        (
-            axes[2],
-            pd.DataFrame(
-                {"Delta": gold_vals},
-                index=gold_assets
-            ),
-            "Gold vs Assets"
-        )
+    regimes = [
+        "covid_crash",
+        "luna_collapse",
+        "ftx_collapse"
     ]
 
-    for ax, data, title in heatmaps:
+    assets = [
+        "BTC-USD",
+        "ETH-USD",
+        "^GSPC",
+        "^GSPTSE",
+        "^HSI",
+        "^BVSP",
+        "^AXJO",
+        "^NSEI",
+        "GC=F",
+        "USDINR=X"
+    ]
 
-        sns.heatmap(
-            data,
-            annot=True,
-            cmap="coolwarm",
-            center=0,
-            fmt=".3f",
-            vmin=vmin,
-            vmax=vmax,
-            cbar=ax == axes[-1],
-            ax=ax
+    for regime in regimes:
+
+        matrix = pd.DataFrame(
+            np.nan,
+            index=assets,
+            columns=assets
         )
 
-        ax.set_title(title)
+        for _, row in df.iterrows():
 
-    plt.suptitle(
-        "Crash vs Normal Correlation Change (Delta)",
-        fontsize=14
-    )
+            pair = row["pair"]
 
-    plt.tight_layout()
-    plt.show()
+            a1, a2 = pair.split("__")
+
+            val = row[regime]
+
+            matrix.loc[a1, a2] = val
+            matrix.loc[a2, a1] = val
+
+        np.fill_diagonal(matrix.values, 1)
+
+        plt.figure(figsize=(10, 8))
+
+        sns.heatmap(
+            matrix,
+            cmap="coolwarm",
+            center=0,
+            annot=False
+        )
+
+        plt.title(
+            f"DCC Correlations — {regime}"
+        )
+
+        plt.tight_layout()
+        plt.show()
 
 
 # =========================================================
@@ -516,7 +520,7 @@ def plot_btc_eth_dcc():
         linewidth=2
     )
 
-    _highlight_crashes(ax, df)
+    _highlight_crashes(ax)
 
     ax.set_title("BTC vs ETH Dynamic Correlation")
     ax.set_xlabel("Date")
@@ -529,32 +533,29 @@ def plot_btc_eth_dcc():
 
 
 # =========================================================
-# 4. CRYPTO VS EQUITY (6 SEPARATE PLOTS)
+# 4. CRYPTO VS EQUITY (DYNAMIC SUBPLOTS)
 # =========================================================
 
 def plot_crypto_equity_dcc():
     """
-    Create 6 plots:
-    BTC vs Asset
-    ETH vs Asset
-
-    One subplot per asset:
-    - 5 global equities
-    - Gold
+    Create one subplot per asset showing BTC and ETH correlations.
     """
 
     df = _load_dcc_data()
 
     assets = GLOBAL_STOCKS + ["GC=F"]
+    total_assets = len(assets)
+    cols = 2
+    rows = int(np.ceil(total_assets / cols))
 
     fig, axes = plt.subplots(
-        3,
-        2,
-        figsize=(16, 14),
+        rows,
+        cols,
+        figsize=(16, 4 * rows + 2),
         sharex=True
     )
 
-    axes = axes.flatten()
+    axes = np.array(axes).flatten()
 
     for idx, asset in enumerate(assets):
 
@@ -588,13 +589,16 @@ def plot_crypto_equity_dcc():
                 linewidth=2
             )
 
-        _highlight_crashes(ax, df)
+        _highlight_crashes(ax)
 
         ax.set_title(asset)
         ax.set_ylabel("Correlation")
 
         ax.grid(True)
         ax.legend()
+
+    for ax in axes[total_assets:]:
+        ax.set_visible(False)
 
     plt.suptitle(
         "Crypto vs Equity Dynamic Correlations",
@@ -609,46 +613,51 @@ def plot_crypto_equity_dcc():
 # 5. GOLD SAFE HAVEN PLOT
 # =========================================================
 
-def plot_gold_safe_haven():
+def plot_gold_safe_haven(batch_size: int = 5):
     """
-    Plot Gold correlations against all equities.
+    Plot Gold correlations against all equities in batches.
     """
+
+    if batch_size <= 0:
+        raise ValueError("batch_size must be a positive integer")
 
     df = _load_dcc_data()
 
-    fig, ax = plt.subplots(figsize=(14, 6))
+    for i in range(0, len(GLOBAL_STOCKS), batch_size):
+        batch = GLOBAL_STOCKS[i:i + batch_size]
 
-    for asset in GLOBAL_STOCKS:
+        fig, ax = plt.subplots(figsize=(14, 6))
 
-        pair = _resolve_pair_column(
-            df.columns,
-            "GC=F",
-            asset
+        for asset in batch:
+            pair = _resolve_pair_column(
+                df.columns,
+                "GC=F",
+                asset
+            )
+
+            if pair is None:
+                continue
+
+            ax.plot(
+                df["date"],
+                df[pair],
+                label=asset
+            )
+
+        _highlight_crashes(ax)
+
+        ax.axhline(
+            0,
+            linestyle="--",
+            linewidth=1
         )
 
-        if pair is None:
-            continue
+        ax.set_title("Gold vs Equity Dynamic Correlations")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("DCC Correlation")
 
-        ax.plot(
-            df["date"],
-            df[pair],
-            label=asset
-        )
+        ax.legend()
+        ax.grid(True)
 
-    _highlight_crashes(ax, df)
-
-    ax.axhline(
-        0,
-        linestyle="--",
-        linewidth=1
-    )
-
-    ax.set_title("Gold vs Equity Dynamic Correlations")
-    ax.set_xlabel("Date")
-    ax.set_ylabel("DCC Correlation")
-
-    ax.legend()
-    ax.grid(True)
-
-    plt.tight_layout()
-    plt.show()
+        plt.tight_layout()
+        plt.show()
