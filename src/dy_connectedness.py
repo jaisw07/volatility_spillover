@@ -229,7 +229,7 @@ def run_regime_dy(
     return summary_df
 
 def rolling_tci(
-    window=45,
+    window=60,
     lags=1,
     horizon=10,
     save=True

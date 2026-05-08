@@ -17,7 +17,7 @@ from sklearn.metrics import (
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from tensorflow.keras.models import Sequential
+from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import (
     LSTM,
     Dense,
@@ -25,7 +25,8 @@ from tensorflow.keras.layers import (
 )
 
 from tensorflow.keras.callbacks import (
-    EarlyStopping
+    EarlyStopping,
+    ModelCheckpoint
 )
 
 INSIGHTS_DIR = "insights"
@@ -217,14 +218,57 @@ def prepare_lstm_data(
         if c not in ["date", "crash_label"]
     ]
 
+    y = df["crash_label"].values
+    dates = df["date"].values
+
+    # =====================================================
+    # NEW SPLITS
+    # =====================================================
+
+    # TRAIN:
+    # Includes COVID + LUNA
+
+    train_rows = (
+        (dates >= np.datetime64("2022-02-28"))
+        &
+        (dates <= np.datetime64("2022-06-30"))
+    )
+
+    # VALIDATION:
+    # Includes FTX
+
+    val_rows = (
+        (dates >= np.datetime64("2020-01-15"))
+        &
+        (dates <= np.datetime64("2020-04-15"))
+    )
+
+    # TEST:
+    # Fully unseen later regime
+
+    ttest_rows = (
+        (dates >= np.datetime64("2022-09-15"))
+        &
+        (dates <= np.datetime64("2022-12-15"))
+    )
+
+    # =====================================================
+    # SCALER
+    # =====================================================
+
     scaler = StandardScaler()
 
-    X_scaled = scaler.fit_transform(
+    scaler.fit(
+        df.loc[train_rows, feature_cols]
+    )
+
+    X_scaled = scaler.transform(
         df[feature_cols]
     )
 
-    y = df["crash_label"].values
-    dates = df["date"].values
+    # =====================================================
+    # SEQUENCES
+    # =====================================================
 
     X_seq, y_seq = create_sequences(
         X_scaled,
@@ -234,59 +278,61 @@ def prepare_lstm_data(
 
     seq_dates = dates[lookback:]
 
-    # =====================================================
-    # TRAIN
-    # COVID + FTX
-    # =====================================================
-
     train_mask = (
-        (
-            (seq_dates >= np.datetime64("2020-01-01"))
-            &
-            (seq_dates <= np.datetime64("2020-08-01"))
-        )
-        |
-        (
-            (seq_dates >= np.datetime64("2022-10-01"))
-            &
-            (seq_dates <= np.datetime64("2023-01-01"))
-        )
+        (seq_dates >= np.datetime64("2022-02-28"))
+        &
+        (seq_dates <= np.datetime64("2022-06-30"))
     )
 
-    # =====================================================
-    # TEST
-    # LUNA
-    # =====================================================
+    val_mask = (
+        (seq_dates >= np.datetime64("2020-01-15"))
+        &
+        (seq_dates <= np.datetime64("2020-04-15"))
+    )
 
     test_mask = (
-        (seq_dates >= np.datetime64("2022-03-01"))
+        (seq_dates >= np.datetime64("2022-09-15"))
         &
-        (seq_dates <= np.datetime64("2022-08-01"))
+        (seq_dates <= np.datetime64("2022-12-15"))
     )
 
     X_train = X_seq[train_mask]
     y_train = y_seq[train_mask]
 
+    X_val = X_seq[val_mask]
+    y_val = y_seq[val_mask]
+
     X_test = X_seq[test_mask]
     y_test = y_seq[test_mask]
 
-    print("\n=== TRAIN TEST DISTRIBUTION ===")
+    print("\n=== DATA DISTRIBUTION ===")
 
     print(
         f"Train crashes: {y_train.sum()} / {len(y_train)}"
     )
 
     print(
+        f"Validation crashes: {y_val.sum()} / {len(y_val)}"
+    )
+
+    print(
         f"Test crashes: {y_test.sum()} / {len(y_test)}"
     )
 
+    print("\n=== UNIQUE LABELS ===")
+
+    print("Train:", np.unique(y_train))
+    print("Validation:", np.unique(y_val))
+    print("Test:", np.unique(y_test))
+
     return (
         X_train,
+        X_val,
         X_test,
         y_train,
+        y_val,
         y_test
     )
-
 
 # =========================================================
 # MODEL
@@ -332,13 +378,16 @@ def build_lstm_model(
 def train_lstm(
     lookback=10,
     epochs=30,
-    batch_size=16
+    batch_size=16,
+    best_model_path=None
 ):
 
     (
         X_train,
+        X_val,
         X_test,
         y_train,
+        y_val,
         y_test
     ) = prepare_lstm_data(
         lookback=lookback
@@ -352,19 +401,52 @@ def train_lstm(
     )
 
     early_stop = EarlyStopping(
-        monitor="loss",
-        patience=5,
+        monitor="val_loss",
+        patience=10,
         restore_best_weights=True
     )
 
-    history = model.fit(
-        X_train,
-        y_train,
-        epochs=epochs,
-        batch_size=batch_size,
-        callbacks=[early_stop],
+    if best_model_path is None:
+        best_model_path = os.path.join(
+            INSIGHTS_DIR,
+            "lstm_best_model.keras"
+        )
+
+    os.makedirs(
+        os.path.dirname(best_model_path),
+        exist_ok=True
+    )
+
+    checkpoint = ModelCheckpoint(
+        filepath=best_model_path,
+        monitor="val_loss",
+        mode="min",
+        save_best_only=True,
+        save_weights_only=False,
         verbose=1
     )
+
+    history = model.fit(
+
+        X_train,
+        y_train,
+
+        validation_data=(
+            X_val,
+            y_val
+        ),
+
+        epochs=epochs,
+
+        batch_size=batch_size,
+
+        callbacks=[early_stop, checkpoint],
+
+        verbose=1
+    )
+
+    if os.path.exists(best_model_path):
+        model = load_model(best_model_path)
 
     return (
         model,
@@ -372,7 +454,6 @@ def train_lstm(
         X_test,
         y_test
     )
-
 
 # =========================================================
 # EVALUATE
@@ -439,6 +520,7 @@ def evaluate_lstm(
         classification_report(
             y_test,
             y_pred,
+            labels=[0, 1],
             target_names=["Normal", "Crash"],
             zero_division=0
         )
@@ -465,8 +547,14 @@ def plot_training_history(history):
         label="Train Loss"
     )
 
+    if "val_loss" in history.history:
+        plt.plot(
+            history.history["val_loss"],
+            label="Val Loss"
+        )
+
     plt.title(
-        "LSTM Training Loss"
+        "LSTM Training and Validation Loss"
     )
 
     plt.xlabel("Epoch")

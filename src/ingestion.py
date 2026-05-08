@@ -29,8 +29,8 @@ ASSETS = {
     "AUD=X": "fx"      # AUD → USD
 }
 
-START_DATE = "2020-01-01"
-END_DATE = "2025-12-31"
+START_DATE = "2019-01-01"
+END_DATE = "2024-12-31"
 
 DATASET_DIR = "dataset"
 
